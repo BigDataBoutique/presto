@@ -66,6 +66,15 @@ public class TestBlackHoleSmoke
     }
 
     @Test
+    public void testCreateSchema()
+            throws SQLException
+    {
+        assertEquals(queryRunner.execute("SHOW SCHEMAS FROM blackhole").getRowCount(), 2);
+        queryRunner.execute("CREATE SCHEMA blackhole.test");
+        assertEquals(queryRunner.execute("SHOW SCHEMAS FROM blackhole").getRowCount(), 3);
+    }
+
+    @Test
     public void createTableWhenTableIsAlreadyCreated()
             throws SQLException
     {
@@ -131,6 +140,24 @@ public class TestBlackHoleSmoke
                 "CREATE TABLE distributed_test WITH ( distributed_on = array['orderkey'] ) AS SELECT * FROM tpch.tiny.orders",
                 15000L);
         assertThatQueryReturnsValue("DROP TABLE distributed_test", true);
+    }
+
+    @Test
+    public void testCreateTableInNotExistSchema()
+    {
+        int tablesBeforeCreate = listBlackHoleTables().size();
+
+        String createTableSql = "CREATE TABLE schema1.test_table (x date)";
+        try {
+            queryRunner.execute(createTableSql);
+            fail("Expected exception to be thrown here!");
+        }
+        catch (RuntimeException ex) {
+            assertTrue(ex.getMessage().equals("Schema schema1 not found"));
+        }
+
+        int tablesAfterCreate = listBlackHoleTables().size();
+        assertEquals(tablesBeforeCreate, tablesAfterCreate);
     }
 
     @Test

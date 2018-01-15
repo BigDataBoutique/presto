@@ -76,6 +76,7 @@
         <module>presto-redis</module>
         <module>presto-accumulo</module>
         <module>presto-cassandra</module>
+        <module>presto-elasticsearch</module>
         <module>presto-blackhole</module>
         <module>presto-memory</module>
         <module>presto-orc</module>

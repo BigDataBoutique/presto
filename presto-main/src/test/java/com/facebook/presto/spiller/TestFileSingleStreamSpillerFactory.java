@@ -44,6 +44,7 @@ import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.MoreFiles.listFiles;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static com.google.common.util.concurrent.Futures.getUnchecked;
+import static java.util.Collections.emptyList;
 import static org.testng.Assert.assertEquals;
 
 @Test(singleThreaded = true)
@@ -56,7 +57,6 @@ public class TestFileSingleStreamSpillerFactory
 
     @BeforeMethod
     public void setUp()
-            throws Exception
     {
         executor = MoreExecutors.listeningDecorator(Executors.newCachedThreadPool());
         closer.register(() -> executor.shutdownNow());
@@ -125,6 +125,20 @@ public class TestFileSingleStreamSpillerFactory
                 spillPaths,
                 0.0);
 
+        spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext());
+    }
+
+    @Test(expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = "No spill paths configured")
+    public void throwIfNoSpillPaths()
+    {
+        List<Path> spillPaths = emptyList();
+        List<Type> types = ImmutableList.of(BIGINT);
+        FileSingleStreamSpillerFactory spillerFactory = new FileSingleStreamSpillerFactory(
+                executor, // executor won't be closed, because we don't call destroy() on the spiller factory
+                new BlockEncodingManager(new TypeRegistry(ImmutableSet.copyOf(types))),
+                new SpillerStats(),
+                spillPaths,
+                1.0);
         spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext());
     }
 

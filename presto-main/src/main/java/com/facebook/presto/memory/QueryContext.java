@@ -21,8 +21,7 @@ import com.facebook.presto.memory.context.MemoryTrackingContext;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spiller.SpillSpaceTracker;
-import com.google.common.util.concurrent.FutureCallback;
-import com.google.common.util.concurrent.Futures;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.units.DataSize;
 
@@ -43,6 +42,7 @@ import static com.facebook.presto.memory.context.AggregatedMemoryContext.newRoot
 import static com.facebook.presto.operator.Operator.NOT_BLOCKED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Verify.verify;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.airlift.units.DataSize.succinctBytes;
 import static java.util.Objects.requireNonNull;
@@ -103,6 +103,12 @@ public class QueryContext
         // Allow the query to use the entire pool. This way the worker will kill the query, if it uses the entire local general pool.
         // The coordinator will kill the query if the cluster runs out of memory.
         maxMemory = memoryPool.getMaxBytes();
+    }
+
+    @VisibleForTesting
+    MemoryTrackingContext getQueryMemoryContext()
+    {
+        return queryMemoryContext;
     }
 
     private synchronized ListenableFuture<?> updateUserMemory(long delta)
@@ -170,32 +176,22 @@ public class QueryContext
     public synchronized void setMemoryPool(MemoryPool pool)
     {
         requireNonNull(pool, "pool is null");
-        if (pool.getId().equals(memoryPool.getId())) {
+        if (memoryPool == pool) {
             // Don't unblock our tasks and thrash the pools, if this is a no-op
             return;
         }
         MemoryPool originalPool = memoryPool;
-        long originalReserved = queryMemoryContext.getUserMemory() + queryMemoryContext.getRevocableMemory();
+        long originalReserved = queryMemoryContext.getUserMemory();
+        long originalRevocableReserved = queryMemoryContext.getRevocableMemory();
         memoryPool = pool;
         ListenableFuture<?> future = pool.reserve(queryId, originalReserved);
-        Futures.addCallback(future, new FutureCallback<Object>()
-        {
-            @Override
-            public void onSuccess(Object result)
-            {
-                originalPool.free(queryId, originalReserved);
-                // Unblock all the tasks, if they were waiting for memory, since we're in a new pool.
-                taskContexts.values().forEach(TaskContext::moreMemoryAvailable);
-            }
-
-            @Override
-            public void onFailure(Throwable t)
-            {
-                originalPool.free(queryId, originalReserved);
-                // Unblock all the tasks, if they were waiting for memory, since we're in a new pool.
-                taskContexts.values().forEach(TaskContext::moreMemoryAvailable);
-            }
-        });
+        originalPool.free(queryId, originalReserved);
+        pool.reserveRevocable(queryId, originalRevocableReserved);
+        originalPool.freeRevocable(queryId, originalRevocableReserved);
+        future.addListener(() -> {
+            // Unblock all the tasks, if they were waiting for memory, since we're in a new pool.
+            taskContexts.values().forEach(TaskContext::moreMemoryAvailable);
+        }, directExecutor());
     }
 
     public synchronized MemoryPool getMemoryPool()

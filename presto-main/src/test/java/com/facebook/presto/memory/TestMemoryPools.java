@@ -57,6 +57,7 @@ import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
 
 @Test(singleThreaded = true)
 public class TestMemoryPools
@@ -128,7 +129,6 @@ public class TestMemoryPools
 
     @AfterMethod(alwaysRun = true)
     public void tearDown()
-            throws Exception
     {
         if (localQueryRunner != null) {
             localQueryRunner.close();
@@ -138,7 +138,6 @@ public class TestMemoryPools
 
     @Test
     public void testBlockingOnUserMemory()
-            throws Exception
     {
         setUpCountStarFromOrdersWithJoin();
         assertTrue(userPool.tryReserve(fakeQueryId, TEN_MEGABYTES.toBytes()));
@@ -165,8 +164,24 @@ public class TestMemoryPools
     }
 
     @Test
+    public void testMemoryFutureCancellation()
+    {
+        setUpCountStarFromOrdersWithJoin();
+        ListenableFuture future = userPool.reserve(fakeQueryId, TEN_MEGABYTES.toBytes());
+        assertTrue(!future.isDone());
+        try {
+            future.cancel(true);
+            fail("cancel should fail");
+        }
+        catch (UnsupportedOperationException e) {
+            assertEquals(e.getMessage(), "cancellation is not supported");
+        }
+        userPool.free(fakeQueryId, TEN_MEGABYTES.toBytes());
+        assertTrue(future.isDone());
+    }
+
+    @Test
     public void testBlockingOnRevocableMemoryFreeUser()
-            throws Exception
     {
         setupConsumeRevocableMemory(ONE_BYTE, 10);
         assertTrue(userPool.tryReserve(fakeQueryId, TEN_MEGABYTES_WITHOUT_TWO_BYTES.toBytes()));
@@ -188,7 +203,6 @@ public class TestMemoryPools
 
     @Test
     public void testBlockingOnRevocableMemoryFreeViaRevoke()
-            throws Exception
     {
         RevocableMemoryOperator revocableMemoryOperator = setupConsumeRevocableMemory(ONE_BYTE, 5);
         assertTrue(userPool.tryReserve(fakeQueryId, TEN_MEGABYTES_WITHOUT_TWO_BYTES.toBytes()));

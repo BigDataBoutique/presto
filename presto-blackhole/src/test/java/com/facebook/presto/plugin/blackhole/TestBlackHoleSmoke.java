@@ -26,7 +26,6 @@ import org.testng.annotations.BeforeTest;
 import org.testng.annotations.Test;
 
 import java.math.BigDecimal;
-import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -67,7 +66,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void testCreateSchema()
-            throws SQLException
     {
         assertEquals(queryRunner.execute("SHOW SCHEMAS FROM blackhole").getRowCount(), 2);
         queryRunner.execute("CREATE SCHEMA blackhole.test");
@@ -76,7 +74,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void createTableWhenTableIsAlreadyCreated()
-            throws SQLException
     {
         String createTableSql = "CREATE TABLE nation as SELECT * FROM tpch.tiny.nation";
         queryRunner.execute(createTableSql);
@@ -94,7 +91,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void blackHoleConnectorUsage()
-            throws SQLException
     {
         assertThatQueryReturnsValue("CREATE TABLE nation as SELECT * FROM tpch.tiny.nation", 25L);
 
@@ -224,7 +220,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void testInsertAllTypes()
-            throws Exception
     {
         createBlackholeAllTypesTable();
         assertThatQueryReturnsValue(
@@ -247,7 +242,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void testSelectAllTypes()
-            throws Exception
     {
         createBlackholeAllTypesTable();
         MaterializedResult rows = queryRunner.execute("SELECT * FROM blackhole_all_types");
@@ -272,7 +266,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void testSelectWithUnenforcedConstraint()
-            throws Exception
     {
         createBlackholeAllTypesTable();
         MaterializedResult rows = queryRunner.execute("SELECT * FROM blackhole_all_types where _bigint > 10");
@@ -311,7 +304,6 @@ public class TestBlackHoleSmoke
 
     @Test
     public void pageProcessingDelay()
-            throws Exception
     {
         Session session = testSessionBuilder()
                 .setCatalog("blackhole")

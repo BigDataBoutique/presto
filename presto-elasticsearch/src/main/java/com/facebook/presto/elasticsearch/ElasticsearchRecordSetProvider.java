@@ -30,10 +30,10 @@ import static java.util.Objects.requireNonNull;
 
 public class ElasticsearchRecordSetProvider implements ConnectorRecordSetProvider {
     private final String connectorId;
-    private final ElasticsearchMultiClusterClient elasticsearchClient;
+    private final ElasticsearchClient elasticsearchClient;
 
     @Inject
-    public ElasticsearchRecordSetProvider(ElasticsearchConnectorId connectorId, ElasticsearchMultiClusterClient elasticsearchClient)
+    public ElasticsearchRecordSetProvider(ElasticsearchConnectorId connectorId, ElasticsearchClient elasticsearchClient)
     {
         this.connectorId = requireNonNull(connectorId, "connectorId is null").toString();
         this.elasticsearchClient = requireNonNull(elasticsearchClient, "client is null");

@@ -28,12 +28,12 @@ import static com.google.common.collect.Maps.newHashMap;
 import static java.util.Objects.requireNonNull;
 
 public class ElasticsearchRecordSet implements RecordSet {
-    private final ElasticsearchMultiClusterClient elasticsearchClient;
+    private final ElasticsearchClient elasticsearchClient;
     private final ElasticsearchSplit split;
     private final List<ElasticsearchColumnHandle> columnHandles;
     private final ImmutableList<Type> columnTypes;
 
-    public ElasticsearchRecordSet(ElasticsearchSplit split, List<ElasticsearchColumnHandle> columnHandles, ElasticsearchMultiClusterClient elasticsearchClient) {
+    public ElasticsearchRecordSet(ElasticsearchSplit split, List<ElasticsearchColumnHandle> columnHandles, ElasticsearchClient elasticsearchClient) {
         this.elasticsearchClient = requireNonNull(elasticsearchClient, "client is null");
         this.split = requireNonNull(split, "split is null");
         this.columnHandles = requireNonNull(columnHandles, "column handles is null");

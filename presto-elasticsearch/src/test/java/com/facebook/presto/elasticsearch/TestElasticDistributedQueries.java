@@ -30,7 +30,6 @@ public class TestElasticDistributedQueries extends AbstractTestQueries {
 
     @BeforeClass
     public void setUp()
-            throws Exception
     {
         this.elasticQueryRunner = (ElasticQueryRunner) getQueryRunner();
     }

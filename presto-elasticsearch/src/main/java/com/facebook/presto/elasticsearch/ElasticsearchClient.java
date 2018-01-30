@@ -29,6 +29,7 @@ import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.CredentialsProvider;
 import org.apache.http.entity.ContentType;
 import org.apache.http.impl.client.BasicCredentialsProvider;
+import org.apache.http.message.BasicHeader;
 import org.apache.http.nio.entity.NStringEntity;
 import org.apache.http.util.EntityUtils;
 import org.elasticsearch.client.Response;
@@ -57,37 +58,27 @@ import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.google.common.collect.Maps.newHashMap;
 import static java.util.Objects.requireNonNull;
 
-public class ElasticsearchMultiClusterClient implements Closeable {
+public class ElasticsearchClient implements Closeable {
 
-    private static final Logger log = Logger.get(ElasticsearchMultiClusterClient.class);
+    private static final Logger log = Logger.get(ElasticsearchClient.class);
 
     private final ElasticsearchConnectorConfig config;
-    private final HashMap<String, ElasticsearchCluster> clusters;
+    private final RestClient restClient;
+    private final Sniffer sniffer;
+
+    private final HashMap<String, String> requestParams = newHashMap();
+    private final ContentType BULK = ContentType.create("application/x-ndjson", "UTF-8");
 
     @Inject
-    public ElasticsearchMultiClusterClient(final ElasticsearchConnectorConfig config)
-            throws IOException
+    public ElasticsearchClient(final ElasticsearchConnectorConfig config)
     {
         requireNonNull(config, "config is null");
         this.config = config;
 
-        // TODO support multiple clusters from config
-        this.clusters = newHashMap();
-        this.clusters.put(config.getDefaultSchema(), createClusterObject(config.getNodes()));
-    }
+//        this.clusters.put(config.getDefaultSchema(), createClusterObject(config.getNodes()));
 
-    ElasticsearchMultiClusterClient(final ElasticsearchConnectorConfig config, RestClient restClient)
-            throws IOException
-    {
-        requireNonNull(config, "config is null");
-        this.config = config;
-
-        this.clusters = newHashMap();
-        this.clusters.put(config.getDefaultSchema(), new ElasticsearchCluster(restClient, Sniffer.builder(restClient).build()));
-    }
-
-    private static ElasticsearchCluster createClusterObject(Set<HostAddress> nodes) {
         // TODO support scheme (http / https) when creating the hosts
+        final Set<HostAddress> nodes = config.getNodes();
         final HttpHost[] hosts =
                 nodes.stream().map(add -> new HttpHost(add.getHostText(), add.getPort())).toArray(HttpHost[]::new);
 
@@ -97,30 +88,32 @@ public class ElasticsearchMultiClusterClient implements Closeable {
 
         final RestClientBuilder restClientBuilder = RestClient.builder(hosts);
 
-        RestClient restClient = restClientBuilder.build();
-        Sniffer sniffer = Sniffer.builder(restClient).build();
-        return new ElasticsearchCluster(restClient, sniffer);
+        this.restClient = restClientBuilder.build();
+        this.sniffer = Sniffer.builder(this.restClient).build();
     }
 
-    public Set<String> getClusterNames() {
-        return clusters.keySet();
+    ElasticsearchClient(final ElasticsearchConnectorConfig config, RestClient restClient)
+    {
+        requireNonNull(config, "config is null");
+        this.config = config;
+
+        this.restClient = restClient;
+        this.sniffer = Sniffer.builder(restClient).build();
     }
 
-    public List<ColumnMetadata> getIndex(final String clusterName, final String indexAndTypeName) {
+    public List<ColumnMetadata> getIndex(String indexAndTypeName) {
         try {
-            return getIndexes(clusterName).get(indexAndTypeName);
+            if (indexAndTypeName.indexOf('/') == -1)
+                indexAndTypeName += "/doc";
+            return getIndexes().get(indexAndTypeName);
         } catch (IOException e) {
             log.error(e);
             return null;
         }
     }
 
-    public HashMap<String, List<ColumnMetadata>> getIndexes(final String clusterName) throws IOException {
-        requireNonNull(clusterName, "clusterName is null");
-
-        ElasticsearchCluster cluster = clusters.get(config.getDefaultSchema());
-        final RestClient client = cluster.getRestClient();
-        final Response response = client.performRequest("GET", "/_mapping");
+    public HashMap<String, List<ColumnMetadata>> getIndexes() throws IOException {
+        final Response response = restClient.performRequest("GET", "/_mapping");
 
         HashMap<String, List<ColumnMetadata>> indexes = newHashMap();
         ObjectMapper mapper = new ObjectMapper();
@@ -135,7 +128,7 @@ public class ElasticsearchMultiClusterClient implements Closeable {
                     final Map.Entry<String, JsonNode> type = types.next();
                     if ("_default_".equals(type.getKey())) continue; // skip non-actual types
 
-                    log.info("Discovered Elasticsearch Presto table: " + index.getKey() + "/" + type.getKey());
+                    log.info("Discovered Elasticsearch Presto table [" + index.getKey() + "] with type " + type.getKey());
 
                     indexes.put(index.getKey() + "/" + type.getKey(), getColumns(type.getValue().get("properties")));
                 }
@@ -159,7 +152,7 @@ public class ElasticsearchMultiClusterClient implements Closeable {
             final JsonNode fieldDefinition = field.getValue();
 
             ret.add(new ColumnMetadata(fieldName, typeToPrestoType(fieldDefinition.get("type").asText())));
-            log.info("Field " + fieldName + ", def: " + fieldDefinition.toString());
+//            log.info("Field " + fieldName + ", def: " + fieldDefinition.toString());
 
             JsonNode subFields = fieldDefinition.get("fields");
             if (subFields != null) {
@@ -167,7 +160,7 @@ public class ElasticsearchMultiClusterClient implements Closeable {
                 while (it.hasNext()) {
                     final Map.Entry<String, JsonNode> subField = it.next();
                     ret.add(new ColumnMetadata(fieldName + "." + subField.getKey(), typeToPrestoType(subField.getValue().get("type").asText())));
-                    log.info("Field " + fieldName + "." + subField.getKey() + ", def: " + subField.getValue().toString());
+//                    log.info("Field " + fieldName + "." + subField.getKey() + ", def: " + subField.getValue().toString());
                 }
             }
         }
@@ -235,8 +228,6 @@ public class ElasticsearchMultiClusterClient implements Closeable {
     }
 
     private void executeQuery(final String clusterName) {
-        final RestClient client = clusters.get(clusterName).getRestClient();
-
         final HttpEntity query = new NStringEntity(
                 "{\n" +
                         "    \"query\" : {\n" +
@@ -247,17 +238,11 @@ public class ElasticsearchMultiClusterClient implements Closeable {
 
     @Override
     public void close() throws IOException {
-        for (final ElasticsearchCluster cluster : clusters.values()) {
-            cluster.close();
-        }
+        sniffer.close();
+        restClient.close();
     }
 
     public void createIndex(SchemaTableName table, List<ElasticsearchColumnHandle> columns) throws IOException {
-        ElasticsearchCluster cluster = clusters.get(config.getDefaultSchema());
-
-        checkArgument(cluster != null, "clusterName not registered: " + table.getSchemaName());
-        final RestClient client = cluster.getRestClient();
-
         final String[] indexAndType = table.getTableName().split("/");
         final String indexName = indexAndType[0];
         final String typeName = indexAndType.length > 1 ? indexAndType[1] : "doc";
@@ -274,15 +259,34 @@ public class ElasticsearchMultiClusterClient implements Closeable {
         }
 
         final HttpEntity indexDefinition = new NStringEntity(idx.toString(), ContentType.APPLICATION_JSON);
-        Response response = client.performRequest("PUT", indexName, newHashMap(), indexDefinition);
+        Response response = restClient.performRequest("PUT", indexName, requestParams, indexDefinition);
     }
 
     public void deleteIndex(SchemaTableName table) throws IOException {
-        ElasticsearchCluster cluster = clusters.get(config.getDefaultSchema());
-        requireNonNull(cluster, "clusterName not registered: " + table.getSchemaName());
-        final RestClient client = cluster.getRestClient();
-
         final String[] indexAndType = table.getTableName().split("/");
-        client.performRequest("DELETE", indexAndType[0]);
+        restClient.performRequest("DELETE", indexAndType[0], requestParams);
+    }
+
+    public void batchIndex(SchemaTableName schemaTableName, List<ObjectNode> batch) throws IOException {
+        if (batch.size() == 0) {
+            return;
+        }
+
+        final String[] indexAndType = schemaTableName.getTableName().split("/");
+        final String indexName = indexAndType[0];
+        final String typeName = indexAndType.length > 1 ? indexAndType[1] : "doc";
+
+        StringBuilder sb = new StringBuilder();
+        for (final ObjectNode doc : batch) {
+            sb.append("{\"index\":{\"_type\":\"").append(typeName).append("\"}}").append('\n');
+            sb.append(doc.toString()).append('\n');
+        }
+
+        final HttpEntity bulk = new NStringEntity(sb.toString(), BULK);
+        Response response = restClient.performRequest("POST", indexName + "/_bulk",
+                requestParams, bulk, new BasicHeader("Content-Type", "application/x-ndjson"));
+        if (response.getStatusLine().getStatusCode() != 200) {
+            throw new IOException("Error while trying to write data"); // TODO
+        }
     }
 }

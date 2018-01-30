@@ -1,11 +1,23 @@
 # Presto Elasticsearch Connector
 
-"elasticsearch" is a Presto Catalog using this connector. A Catalog can refer to multiple clusters.
+We map Elasticsearch concepts to SQL catalog/schema/table/column as follows:
 
-An Elasticsearch Index and Type pairs in the format `{index_name}/{type_name}` is a Presto Table
+```
+Catalog = cluster
+Schema = part of cluster (index prefix?), currently we ignore schema name completely
+Table = index+type
+Column = document field
+```
 
-A list of such Index-Type pairs in a signle cluster, is a Schema in that Catalog
+An Elasticsearch Index and Type pairs in the format `{index_name}/{type_name}` is represented in Presto as a Table.
 
 The Mapping under Index-Type in Elasticsearch is used to figure out Columns in the Table and their data type.
 
+A catalog maps to a `connector + (optional) configuration`, so you can have multiple catalogs (catalog is an instance of a connector) of the same connector. 
+
+
 TODO: support partitioning via index naming pattern
+
+TODO: review https://prestodb.io/docs/current/connector/redshift.html
+
+TODO: Suppot geo-spatial queries https://prestodb.io/docs/current/functions/geospatial.html

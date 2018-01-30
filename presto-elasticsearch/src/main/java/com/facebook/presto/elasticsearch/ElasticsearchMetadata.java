@@ -15,7 +15,6 @@ package com.facebook.presto.elasticsearch;
 
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
-import com.facebook.presto.spi.ConnectorInsertTableHandle;
 import com.facebook.presto.spi.ConnectorNewTableLayout;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
 import com.facebook.presto.spi.ConnectorSession;
@@ -25,6 +24,7 @@ import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 import com.facebook.presto.spi.ConnectorTableLayoutResult;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.Constraint;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.TableNotFoundException;
@@ -38,6 +38,7 @@ import io.airlift.slice.Slice;
 import javax.inject.Inject;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -45,6 +46,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.facebook.presto.elasticsearch.ElasticsearchPlugin.checkType;
+import static com.facebook.presto.spi.StandardErrorCode.ALREADY_EXISTS;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
@@ -54,32 +56,40 @@ public class ElasticsearchMetadata implements ConnectorMetadata {
 
     private static final Logger log = Logger.get(ElasticsearchMetadata.class);
 
+    private final Map<String, Map<String, Object>> schemas = new HashMap<>();
+
     private final String connectorId;
-    private final ElasticsearchMultiClusterClient elasticsearchClient;
+    private final ElasticsearchClient elasticsearchClient;
     private final AtomicReference<Runnable> rollbackAction = new AtomicReference<>();
 
     @Inject
-    public ElasticsearchMetadata(ElasticsearchConnectorId connectorId, ElasticsearchMultiClusterClient elasticsearchClient)
+    public ElasticsearchMetadata(ElasticsearchConnectorId connectorId,
+                                 ElasticsearchClient elasticsearchClient)
     {
         this.connectorId = requireNonNull(connectorId, "connectorId is null").toString();
         this.elasticsearchClient = requireNonNull(elasticsearchClient, "client is null");
+
+        this.schemas.put("default", new HashMap<>());
+    }
+
+    @Override
+    public boolean schemaExists(ConnectorSession session, String schemaName) {
+        // TODO hack
+        return true;
     }
 
     @Override
     public List<String> listSchemaNames(ConnectorSession session) {
         // TODO schemas are essentially ES clusters, and should maybe be taken from the config
-        return ImmutableList.copyOf(elasticsearchClient.getClusterNames());
+//        return ImmutableList.copyOf(elasticsearchClient.getClusterNames());
+        return ImmutableList.copyOf(schemas.keySet());
     }
 
     @Override
     public ElasticsearchTableHandle getTableHandle(ConnectorSession session, SchemaTableName tableName) {
         requireNonNull(tableName, "tableName is null");
 
-        if (!listSchemaNames(session).contains(tableName.getSchemaName())) {
-            return null;
-        }
-
-        List<ColumnMetadata> table = elasticsearchClient.getIndex(tableName.getSchemaName(), tableName.getTableName());
+        List<ColumnMetadata> table = elasticsearchClient.getIndex(tableName.getTableName());
         if (table == null) {
             return null;
         }
@@ -111,15 +121,12 @@ public class ElasticsearchMetadata implements ConnectorMetadata {
     public List<SchemaTableName> listTables(ConnectorSession session, String schemaNameOrNull) {
         // TODO support prefixed indexes ("time based indexes", "rolling indexes") as a single partitioned table
         final ImmutableList.Builder<SchemaTableName> tableNames = ImmutableList.builder();
-        for (final String schemaName : listSchemas(session, schemaNameOrNull)) {
-            try {
-                for (final String tableName : elasticsearchClient.getIndexes(schemaName).keySet()) {
-                    tableNames.add(new SchemaTableName(schemaName, tableName));
-                }
+        try {
+            for (final String tableName : elasticsearchClient.getIndexes().keySet()) {
+                tableNames.add(new SchemaTableName("default", tableName));
             }
-            catch (IOException e) {
-                log.error(e, "Error while trying to list Elasticsearch tables");
-            }
+        } catch (IOException e) {
+            log.error(e, "Error while trying to list Elasticsearch tables");
         }
         return tableNames.build();
     }
@@ -137,7 +144,7 @@ public class ElasticsearchMetadata implements ConnectorMetadata {
         ElasticsearchTableHandle elasticsearchTableHandle = checkType(tableHandle, ElasticsearchTableHandle.class, "tableHandle");
         checkArgument(elasticsearchTableHandle.getConnectorId().equals(connectorId), "tableHandle is not for this connector");
 
-        List<ColumnMetadata> table = elasticsearchClient.getIndex(elasticsearchTableHandle.getSchemaName(), elasticsearchTableHandle.getTableName());
+        List<ColumnMetadata> table = elasticsearchClient.getIndex(elasticsearchTableHandle.getTableName());
         if (table == null) {
             throw new TableNotFoundException(elasticsearchTableHandle.toSchemaTableName());
         }
@@ -186,7 +193,7 @@ public class ElasticsearchMetadata implements ConnectorMetadata {
             return null;
         }
 
-        List<ColumnMetadata> columns = elasticsearchClient.getIndex(tableName.getSchemaName(), tableName.getTableName());
+        List<ColumnMetadata> columns = elasticsearchClient.getIndex(tableName.getTableName());
         if (columns == null) {
             return null;
         }
@@ -219,12 +226,17 @@ public class ElasticsearchMetadata implements ConnectorMetadata {
                 .collect(toList());
     }
 
-//    @Override
-    // TODO
-    public void createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
-    {
+    @Override
+    public void createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, boolean ignoreExisting) {
         List<ElasticsearchColumnHandle> columns = buildColumnHandles(tableMetadata);
         try {
+            if (elasticsearchClient.getIndex(tableMetadata.getTable().getTableName()) != null) {
+                if (ignoreExisting) {
+                    elasticsearchClient.deleteIndex(tableMetadata.getTable());
+                } else {
+                    throw new PrestoException(ALREADY_EXISTS, "Index [" + tableMetadata.getTable() + "] already exists on Elasticsearch");
+                }
+            }
             elasticsearchClient.createIndex(tableMetadata.getTable(), columns);
         } catch (IOException e) {
             log.error(e, "Error while trying to create a table on Elasticsearch");
@@ -232,7 +244,8 @@ public class ElasticsearchMetadata implements ConnectorMetadata {
     }
 
     @Override
-    public ConnectorOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Optional<ConnectorNewTableLayout> layout)
+    public ConnectorOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata,
+                                                       Optional<ConnectorNewTableLayout> layout)
     {
         List<ElasticsearchColumnHandle> columns = buildColumnHandles(tableMetadata);
 

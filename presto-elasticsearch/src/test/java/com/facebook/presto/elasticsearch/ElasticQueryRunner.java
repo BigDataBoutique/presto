@@ -19,7 +19,6 @@ import com.facebook.presto.tpch.TpchPlugin;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.tpch.TpchTable;
 import pl.allegro.tech.embeddedelasticsearch.EmbeddedElastic;
-import pl.allegro.tech.embeddedelasticsearch.IndexSettings;
 import pl.allegro.tech.embeddedelasticsearch.PopularProperties;
 
 import java.util.Map;
@@ -50,10 +49,8 @@ public final class ElasticQueryRunner extends DistributedQueryRunner {
                 .withSetting(PopularProperties.TRANSPORT_TCP_PORT, 9501)
                 .withSetting(PopularProperties.HTTP_PORT, 9502)
 
-                .withSetting(PopularProperties.CLUSTER_NAME, "presto-easticsearch")
-                .withIndex("test-idx", IndexSettings.builder()
-//                    .withType("doc", getSystemResourceAsStream("index-mapping.json"))
-                        .build())
+                .withSetting(PopularProperties.CLUSTER_NAME, "presto-easticsearch-tests")
+
                 .build()
                 .start();
     }
@@ -63,7 +60,7 @@ public final class ElasticQueryRunner extends DistributedQueryRunner {
     {
         ElasticQueryRunner queryRunner = null;
         try {
-            queryRunner = new ElasticQueryRunner(createSession(), 3);
+            queryRunner = new ElasticQueryRunner(createSession(), 2);
             queryRunner.installPlugin(new TpchPlugin());
             queryRunner.createCatalog("tpch", "tpch");
 
@@ -72,7 +69,7 @@ public final class ElasticQueryRunner extends DistributedQueryRunner {
             );
 
             queryRunner.installPlugin(new ElasticsearchPlugin());
-            queryRunner.createCatalog("es", "elasticsearch", properties);
+            queryRunner.createCatalog("es-tpch", "elasticsearch", properties);
 
             copyTpchTables(queryRunner, "tpch", TINY_SCHEMA_NAME, createSession(), tables);
 
@@ -87,7 +84,7 @@ public final class ElasticQueryRunner extends DistributedQueryRunner {
     public static Session createSession()
     {
         return testSessionBuilder()
-                .setCatalog("es")
+                .setCatalog("es-tpch")
                 .setSchema(TPCH_SCHEMA)
                 .setTimeZoneKey(UTC_KEY)
                 .setLocale(ENGLISH)

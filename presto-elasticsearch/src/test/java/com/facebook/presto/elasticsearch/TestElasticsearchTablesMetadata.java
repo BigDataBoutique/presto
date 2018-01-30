@@ -15,7 +15,6 @@ package com.facebook.presto.elasticsearch;
 
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.type.VarcharType;
-import org.elasticsearch.client.RestClient;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -29,8 +28,8 @@ public class TestElasticsearchTablesMetadata extends BaseElasticsearchConnectorT
 
         final ElasticsearchConnectorConfig config = new ElasticsearchConnectorConfig();
         config.setNodes("http://localhost:51010");
-        try (ElasticsearchMultiClusterClient client = new ElasticsearchMultiClusterClient(config, getRestClient())) {
-            HashMap<String, List<ColumnMetadata>> indexes = client.getIndexes(config.getDefaultSchema());
+        try (ElasticsearchClient client = new ElasticsearchClient(config, getRestClient())) {
+            HashMap<String, List<ColumnMetadata>> indexes = client.getIndexes();
 
             assertEquals(1, indexes.size());
 

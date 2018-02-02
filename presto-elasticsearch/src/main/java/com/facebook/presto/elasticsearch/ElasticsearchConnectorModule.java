@@ -37,13 +37,15 @@ public class ElasticsearchConnectorModule implements Module {
         binder.bind(ElasticsearchMetadata.class).in(Scopes.SINGLETON);
         binder.bind(ElasticsearchClient.class).in(Scopes.SINGLETON);
         binder.bind(ElasticsearchSplitManager.class).in(Scopes.SINGLETON);
-        binder.bind(ElasticsearchRecordSetProvider.class).in(Scopes.SINGLETON);
         binder.bind(ElasticsearchHandleResolver.class).in(Scopes.SINGLETON);
         binder.bind(ElasticsearchPageSinkProvider.class).in(Scopes.SINGLETON);
+        binder.bind(ElasticsearchPageSourceProvider.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(ElasticsearchConnectorConfig.class);
 
         jsonBinder(binder).addDeserializerBinding(Type.class).to(TypeDeserializer.class);
     }
+
+    // TODO move cluster client factory method in here
 
     public static final class TypeDeserializer
             extends FromStringDeserializer<Type>

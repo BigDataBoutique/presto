@@ -32,23 +32,23 @@ public class ElasticsearchConnector implements Connector
     private final ElasticsearchSplitManager splitManager;
     private final ElasticsearchMetadata metadata;
     private final LifeCycleManager lifeCycleManager;
-    private final ElasticsearchRecordSetProvider recordSetProvider;
     private final ElasticsearchPageSinkProvider pageSinkProvider;
+    private final ElasticsearchPageSourceProvider pageSourceProvider;
 
     @Inject
     public ElasticsearchConnector(
             LifeCycleManager lifeCycleManager,
             ElasticsearchMetadata metadata,
             ElasticsearchSplitManager splitManager,
-            ElasticsearchRecordSetProvider recordSetProvider,
-            ElasticsearchPageSinkProvider pageSinkProvider
+            ElasticsearchPageSinkProvider pageSinkProvider,
+            ElasticsearchPageSourceProvider pageSourceProvider
     )
     {
         this.lifeCycleManager = requireNonNull(lifeCycleManager, "lifeCycleManager is null");
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.splitManager = requireNonNull(splitManager, "splitManager is null");
-        this.recordSetProvider = requireNonNull(recordSetProvider, "recordSetProvider is null");
         this.pageSinkProvider = pageSinkProvider;
+        this.pageSourceProvider = pageSourceProvider;
     }
 
     @Override
@@ -73,9 +73,8 @@ public class ElasticsearchConnector implements Connector
     }
 
     @Override
-    public ConnectorRecordSetProvider getRecordSetProvider()
-    {
-        return recordSetProvider;
+    public ConnectorPageSourceProvider getPageSourceProvider() {
+        return pageSourceProvider;
     }
 
     @Override

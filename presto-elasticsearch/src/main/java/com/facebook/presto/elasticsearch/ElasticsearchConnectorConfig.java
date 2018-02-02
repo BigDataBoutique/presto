@@ -62,6 +62,13 @@ public class ElasticsearchConnectorConfig {
      */
     private int maximumNumberOfDocsPerSplit = -1;
 
+    /**
+     * The maximum number of requested fields in query which should trigger source filtering. Any
+     * number higher than this is considered to be more costly on Elasticsearch's side to perform
+     * this filtering than on network / Presto side.
+     */
+    private int maximumNumberOfFieldsForSourceFiltering = 4;
+
     @NotNull
     public String getDefaultSchema()
     {
@@ -141,6 +148,22 @@ public class ElasticsearchConnectorConfig {
         this.maximumNumberOfDocsPerSplit = maximumNumberOfDocsPerSplit;
         return this;
     }
+
+    public int getMaximumNumberOfFieldsForSourceFiltering()
+    {
+        return maximumNumberOfFieldsForSourceFiltering;
+    }
+
+    @Config("elasticsearch.max-fields-for-source-filtering")
+    public ElasticsearchConnectorConfig setMaximumNumberOfFieldsForSourceFiltering(int maximumNumberOfFieldsForSourceFiltering)
+    {
+        this.maximumNumberOfFieldsForSourceFiltering = maximumNumberOfFieldsForSourceFiltering;
+        return this;
+    }
+
+
+
+    // TODO support source filtering by configuration
 
     static ImmutableSet<HostAddress> parseNodes(String nodes)
     {

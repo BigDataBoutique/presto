@@ -66,7 +66,7 @@ public class ElasticsearchClient implements Closeable {
     private final RestClient restClient;
     private final Sniffer sniffer;
 
-    private final HashMap<String, String> requestParams = newHashMap();
+    private static final Map<String, String> emptyRequestParams = Collections.unmodifiableMap(newHashMap());
     private final ContentType BULK = ContentType.create("application/x-ndjson", "UTF-8");
 
     @Inject
@@ -134,6 +134,8 @@ public class ElasticsearchClient implements Closeable {
                 }
             }
         }
+
+        // TODO we are also interested in number of docs and number of shards for support better query slicing
 
         return indexes;
     }
@@ -234,12 +236,8 @@ public class ElasticsearchClient implements Closeable {
                         "    \"match_all\": { } \n" +
                         "} \n"+
                         "}", ContentType.APPLICATION_JSON);
-    }
 
-    @Override
-    public void close() throws IOException {
-        sniffer.close();
-        restClient.close();
+
     }
 
     public void createIndex(SchemaTableName table, List<ElasticsearchColumnHandle> columns) throws IOException {
@@ -259,12 +257,12 @@ public class ElasticsearchClient implements Closeable {
         }
 
         final HttpEntity indexDefinition = new NStringEntity(idx.toString(), ContentType.APPLICATION_JSON);
-        Response response = restClient.performRequest("PUT", indexName, requestParams, indexDefinition);
+        Response response = restClient.performRequest("PUT", indexName, emptyRequestParams, indexDefinition);
     }
 
     public void deleteIndex(SchemaTableName table) throws IOException {
         final String[] indexAndType = table.getTableName().split("/");
-        restClient.performRequest("DELETE", indexAndType[0], requestParams);
+        restClient.performRequest("DELETE", indexAndType[0], emptyRequestParams);
     }
 
     public void batchIndex(SchemaTableName schemaTableName, List<ObjectNode> batch) throws IOException {
@@ -284,9 +282,15 @@ public class ElasticsearchClient implements Closeable {
 
         final HttpEntity bulk = new NStringEntity(sb.toString(), BULK);
         Response response = restClient.performRequest("POST", indexName + "/_bulk",
-                requestParams, bulk, new BasicHeader("Content-Type", "application/x-ndjson"));
+                emptyRequestParams, bulk, new BasicHeader("Content-Type", "application/x-ndjson"));
         if (response.getStatusLine().getStatusCode() != 200) {
             throw new IOException("Error while trying to write data"); // TODO
         }
+    }
+
+    @Override
+    public void close() throws IOException {
+        sniffer.close();
+        restClient.close();
     }
 }

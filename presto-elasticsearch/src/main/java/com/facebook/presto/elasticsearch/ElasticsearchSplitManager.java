@@ -37,7 +37,7 @@ public class ElasticsearchSplitManager implements ConnectorSplitManager {
     }
 
     @Override
-    public ConnectorSplitSource getSplits(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorTableLayoutHandle layout) {
+    public ConnectorSplitSource getSplits(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorTableLayoutHandle layout, SplitSchedulingStrategy splitSchedulingStrategy) {
         // The best split strategy for Elasticsearch is to use the Slice Scroll API to have workers execute their own queries
         // See https://www.elastic.co/guide/en/elasticsearch/reference/current/search-request-scroll.html#sliced-scroll
         // Based on total number of hits for a query, we try to make splits based on number of nodes to distribute as
@@ -50,7 +50,11 @@ public class ElasticsearchSplitManager implements ConnectorSplitManager {
 
         // TODO execute query to get total number of hits?
 
-        // TODO number of shards
+        // TODO number of shards - keeping the number of slices <= number of shards avoids in-shard slicing which
+        // TODO significantly slows down first queries
+
+        // TODO possibly use field data for slicing, and also index selection (partitoining)
+
         Set<Node> nodes = nodeManager.getRequiredWorkerNodes();
 //        nodes.size()
 

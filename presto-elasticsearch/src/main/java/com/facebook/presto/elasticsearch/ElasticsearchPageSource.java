@@ -24,15 +24,19 @@ import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignatureParameter;
 import io.airlift.slice.Slice;
+import org.elasticsearch.search.SearchHit;
 import org.joda.time.chrono.ISOChronology;
 
+import java.io.IOException;
 import java.util.Collection;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static com.facebook.presto.elasticsearch.ElasticsearchErrorCode.ELASTICSEARCH_SCROLL_ERROR;
 import static com.facebook.presto.elasticsearch.ElasticsearchPageSink.isArrayType;
 import static com.facebook.presto.elasticsearch.ElasticsearchPageSink.isMapType;
 import static com.facebook.presto.elasticsearch.ElasticsearchPageSink.isRowType;
@@ -56,7 +60,9 @@ public class ElasticsearchPageSource implements ConnectorPageSource {
     private final ElasticsearchSplit split;
     private final List<Type> columnTypes;
     private final List<String> columnNames;
+    private final Iterator<SearchHit> iterator;
 
+    private SearchHit currentDoc = null;
     private long count;
     private boolean finished;
 
@@ -71,8 +77,11 @@ public class ElasticsearchPageSource implements ConnectorPageSource {
         this.columnNames = columns.stream().map(ElasticsearchColumnHandle::getName).collect(toList());
         this.columnTypes = columns.stream().map(ElasticsearchColumnHandle::getType).collect(toList());
 
-        // TODO support source filtering if amount of requested fields is small
-        // TODO this.cursor = client.executeQuery(split, columns);
+        try {
+            this.iterator = client.execute(split, columns);
+        } catch (IOException e) {
+            throw new PrestoException(ELASTICSEARCH_SCROLL_ERROR, e);
+        }
     }
 
     @Override
@@ -96,17 +105,17 @@ public class ElasticsearchPageSource implements ConnectorPageSource {
 
         count = 0;
         for (int i = 0; i < DOCS_PER_REQUEST; i++) {
-//            if (!cursor.hasNext()) {
-//                finished = true;
-//                break;
-//            }
-//            currentDoc = cursor.next();
+            if (!iterator.hasNext()) {
+                finished = true;
+                break;
+            }
+            currentDoc = iterator.next();
             count++;
 
             pageBuilder.declarePosition();
             for (int column = 0; column < columnTypes.size(); column++) {
                 BlockBuilder output = pageBuilder.getBlockBuilder(column);
-//                appendTo(columnTypes.get(column), currentDoc.get(columnNames.get(column)), output);
+                appendTo(columnTypes.get(column), currentDoc.getField(columnNames.get(column)), output);
             }
         }
 

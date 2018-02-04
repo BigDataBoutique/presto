@@ -13,15 +13,21 @@
  */
 package com.facebook.presto.elasticsearch;
 
+import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.predicate.Domain;
+import com.facebook.presto.spi.predicate.Range;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import io.airlift.log.Logger;
+import io.airlift.slice.Slice;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
@@ -29,17 +35,31 @@ import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.CredentialsProvider;
 import org.apache.http.entity.ContentType;
 import org.apache.http.impl.client.BasicCredentialsProvider;
-import org.apache.http.message.BasicHeader;
 import org.apache.http.nio.entity.NStringEntity;
 import org.apache.http.util.EntityUtils;
+import org.elasticsearch.action.bulk.BulkRequest;
+import org.elasticsearch.action.index.IndexRequest;
+import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.client.Response;
 import org.elasticsearch.client.RestClient;
 import org.elasticsearch.client.RestClientBuilder;
+import org.elasticsearch.client.RestHighLevelClient;
 import org.elasticsearch.client.sniff.Sniffer;
+import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.index.query.BoolQueryBuilder;
+import org.elasticsearch.index.query.QueryBuilder;
+import org.elasticsearch.index.query.QueryBuilders;
+import org.elasticsearch.search.SearchHit;
+import org.elasticsearch.search.SearchHits;
+import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.elasticsearch.search.fetch.subphase.FetchSourceContext;
 
 import javax.inject.Inject;
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -55,8 +75,15 @@ import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.TinyintType.TINYINT;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Maps.newHashMap;
 import static java.util.Objects.requireNonNull;
+import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
+import static org.elasticsearch.index.query.QueryBuilders.existsQuery;
+import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
+import static org.elasticsearch.index.query.QueryBuilders.rangeQuery;
+import static org.elasticsearch.index.query.QueryBuilders.termsQuery;
 
 public class ElasticsearchClient implements Closeable {
 
@@ -65,9 +92,11 @@ public class ElasticsearchClient implements Closeable {
     private final ElasticsearchConnectorConfig config;
     private final RestClient restClient;
     private final Sniffer sniffer;
+    private final RestHighLevelClient client;
 
     private static final Map<String, String> emptyRequestParams = Collections.unmodifiableMap(newHashMap());
     private final ContentType BULK = ContentType.create("application/x-ndjson", "UTF-8");
+    private final ObjectMapper mapper = new ObjectMapper();
 
     @Inject
     public ElasticsearchClient(final ElasticsearchConnectorConfig config)
@@ -90,6 +119,7 @@ public class ElasticsearchClient implements Closeable {
 
         this.restClient = restClientBuilder.build();
         this.sniffer = Sniffer.builder(this.restClient).build();
+        this.client = new RestHighLevelClient(restClient);
     }
 
     ElasticsearchClient(final ElasticsearchConnectorConfig config, RestClient restClient)
@@ -99,6 +129,7 @@ public class ElasticsearchClient implements Closeable {
 
         this.restClient = restClient;
         this.sniffer = Sniffer.builder(restClient).build();
+        this.client = new RestHighLevelClient(restClient);
     }
 
     public List<ColumnMetadata> getIndex(String indexAndTypeName) {
@@ -222,22 +253,141 @@ public class ElasticsearchClient implements Closeable {
         return prestoType;
     }
 
-    private static void checkArgument(boolean expression, String errorMessage)
+    static void checkArgument(boolean expression, String errorMessage)
     {
         if (!expression) {
             throw new IllegalArgumentException(errorMessage);
         }
     }
 
-    private void executeQuery(final String clusterName) {
-        final HttpEntity query = new NStringEntity(
-                "{\n" +
-                        "    \"query\" : {\n" +
-                        "    \"match_all\": { } \n" +
-                        "} \n"+
-                        "}", ContentType.APPLICATION_JSON);
+    private QueryBuilder getSearchQuery(ElasticsearchSplit split, List<ElasticsearchColumnHandle> columns)
+    {
+        final BoolQueryBuilder query = boolQuery();
 
+        for (final ElasticsearchColumnHandle column : columns) {
+            split.getTupleDomain()
+                    .getDomains()
+                    .ifPresent((e) -> {
+                        Domain domain = e.get(column);
+                        if (domain != null) {
+                            query.filter(buildPredicate(column, domain));
+                        }
+                    });
+        }
 
+        return query.hasClauses()
+                        ? query
+                        : matchAllQuery();
+    }
+
+    public Iterator<SearchHit> execute(ElasticsearchSplit split, List<ElasticsearchColumnHandle> columns) throws IOException {
+        SearchRequest searchRequest = new SearchRequest(split.getTableName());
+        SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
+        searchSourceBuilder.query(buildQuery(split.getTupleDomain()));
+
+        // TODO base source filtering decision on config
+        if (columns.size() < 5) {
+            String[] includeFields = columns.stream().map(ElasticsearchColumnHandle::getName).toArray(String[]::new);
+            searchSourceBuilder.fetchSource(includeFields, null);
+        }
+
+        // searchSourceBuilder.size(size); TODO
+        searchRequest.source(searchSourceBuilder);
+        searchRequest.scroll(TimeValue.timeValueMinutes(1L));
+
+        SearchResponse searchResponse = client.search(searchRequest);
+        String scrollId = searchResponse.getScrollId();
+        SearchHits hits = searchResponse.getHits();
+
+        return new ElasticsearchIterator(hits, client, scrollId);
+    }
+
+    @VisibleForTesting
+    private QueryBuilder buildQuery(TupleDomain<ColumnHandle> tupleDomain)
+    {
+        BoolQueryBuilder query = boolQuery();
+        if (tupleDomain.getDomains().isPresent()) {
+            for (Map.Entry<ColumnHandle, Domain> entry : tupleDomain.getDomains().get().entrySet()) {
+                ElasticsearchColumnHandle column = (ElasticsearchColumnHandle) entry.getKey();
+                query.filter(buildPredicate(column, entry.getValue()));
+            }
+        }
+        return query;
+    }
+
+    private static QueryBuilder buildPredicate(ElasticsearchColumnHandle column, Domain domain)
+    {
+        String name = column.getName();
+        if (domain.getValues().isNone() && domain.isNullAllowed()) {
+            return boolQuery().mustNot(QueryBuilders.existsQuery(name));
+        }
+        if (domain.getValues().isAll() && !domain.isNullAllowed()) {
+            return QueryBuilders.existsQuery(name);
+        }
+
+        List<Object> singleValues = new ArrayList<>();
+        List<QueryBuilder> disjuncts = new ArrayList<>();
+        for (Range range : domain.getValues().getRanges().getOrderedRanges()) {
+            if (range.isSingleValue()) {
+                singleValues.add(range.getSingleValue());
+            }
+            else {
+                List<QueryBuilder> rangeConjuncts = new ArrayList<>();
+                if (!range.getLow().isLowerUnbounded()) {
+                    switch (range.getLow().getBound()) {
+                        case ABOVE:
+                            rangeConjuncts.add(rangeQuery(column.getName()).gt(range.getLow().getValue()));
+                            break;
+                        case EXACTLY:
+                            rangeConjuncts.add(rangeQuery(column.getName()).gte(range.getLow().getValue()));
+                            break;
+                        case BELOW:
+                            throw new IllegalArgumentException("Low Marker should never use BELOW bound: " + range);
+                        default:
+                            throw new AssertionError("Unhandled bound: " + range.getLow().getBound());
+                    }
+                }
+                if (!range.getHigh().isUpperUnbounded()) {
+                    switch (range.getHigh().getBound()) {
+                        case ABOVE:
+                            throw new IllegalArgumentException("High Marker should never use ABOVE bound: " + range);
+                        case EXACTLY:
+                            rangeConjuncts.add(rangeQuery(column.getName()).lte(range.getLow().getValue()));
+                            break;
+                        case BELOW:
+                            rangeConjuncts.add(rangeQuery(column.getName()).lt(range.getLow().getValue()));
+                            break;
+                        default:
+                            throw new AssertionError("Unhandled bound: " + range.getHigh().getBound());
+                    }
+                }
+                // If rangeConjuncts is null, then the range was ALL, which should already have been checked for
+                verify(!rangeConjuncts.isEmpty());
+                disjuncts.addAll(rangeConjuncts);
+            }
+        }
+
+        // Add back all of the possible single values either as an equality or an IN predicate
+        if (singleValues.size() >= 1) {
+            disjuncts.add(termsQuery(column.getName(), singleValues));
+        }
+
+        if (domain.isNullAllowed()) {
+            disjuncts.add(existsQuery(column.getName()));
+        }
+
+        return orPredicate(disjuncts);
+    }
+
+    private static QueryBuilder orPredicate(List<QueryBuilder> values)
+    {
+        checkState(!values.isEmpty());
+        if (values.size() == 1) {
+            return values.get(0);
+        }
+        BoolQueryBuilder bq = boolQuery();
+        values.forEach(bq::should);
+        return bq;
     }
 
     public void createIndex(SchemaTableName table, List<ElasticsearchColumnHandle> columns) throws IOException {
@@ -249,7 +399,7 @@ public class ElasticsearchClient implements Closeable {
         ObjectNode idx = o.createObjectNode();
         ObjectNode settings = idx.putObject("settings");
         settings.put("index.number_of_replicas", 0);
-        settings.put("index.number_of_shards", 1);
+        settings.put("index.number_of_shards", 1); // TODO make configurable
 
         ObjectNode mappingsProperties = idx.putObject("mappings").putObject(typeName).putObject("properties");
         for (ElasticsearchColumnHandle column : columns) {
@@ -274,18 +424,22 @@ public class ElasticsearchClient implements Closeable {
         final String indexName = indexAndType[0];
         final String typeName = indexAndType.length > 1 ? indexAndType[1] : "doc";
 
-        StringBuilder sb = new StringBuilder();
+//        StringBuilder sb = new StringBuilder();
+        final BulkRequest bulk = new BulkRequest();
         for (final ObjectNode doc : batch) {
-            sb.append("{\"index\":{\"_type\":\"").append(typeName).append("\"}}").append('\n');
-            sb.append(doc.toString()).append('\n');
+            bulk.add(new IndexRequest(indexName, typeName).source(doc.toString(), XContentType.JSON));
+//            sb.append("{\"index\":{\"_type\":\"").append(typeName).append("\"}}").append('\n');
+//            sb.append(doc.toString()).append('\n');
         }
 
-        final HttpEntity bulk = new NStringEntity(sb.toString(), BULK);
-        Response response = restClient.performRequest("POST", indexName + "/_bulk",
-                emptyRequestParams, bulk, new BasicHeader("Content-Type", "application/x-ndjson"));
-        if (response.getStatusLine().getStatusCode() != 200) {
-            throw new IOException("Error while trying to write data"); // TODO
-        }
+//        final HttpEntity bulk = new NStringEntity(sb.toString(), BULK);
+//        Response response = restClient.performRequest("POST", indexName + "/_bulk",
+//                emptyRequestParams, bulk, new BasicHeader("Content-Type", "application/x-ndjson"));
+//        if (response.getStatusLine().getStatusCode() != 200) {
+//            throw new IOException("Error while trying to write data"); // TODO
+//        }
+
+        client.bulk(bulk);
     }
 
     @Override

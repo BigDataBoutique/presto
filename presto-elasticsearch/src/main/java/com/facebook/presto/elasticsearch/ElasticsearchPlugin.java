@@ -50,7 +50,6 @@ public final class ElasticsearchPlugin implements Plugin {
         return firstNonNull(Thread.currentThread().getContextClassLoader(), ElasticsearchPlugin.class.getClassLoader());
     }
 
-
     static <A, B extends A> B checkType(A value, Class<B> target, String name)
     {
         requireNonNull(value, String.format(Locale.ENGLISH, "%s is null", name));

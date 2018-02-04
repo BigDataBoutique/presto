@@ -275,10 +275,4 @@ public class ElasticsearchMetadata implements ConnectorMetadata {
         clearRollback();
         return Optional.empty();
     }
-
-    @Override
-    public void renameTable(ConnectorSession session, ConnectorTableHandle tableHandle, SchemaTableName newTableName)
-    {
-        throw new UnsupportedOperationException();
-    }
 }

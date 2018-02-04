@@ -55,7 +55,7 @@ public class ElasticsearchSplitManager implements ConnectorSplitManager {
 
         // TODO possibly use field data for slicing, and also index selection (partitoining)
 
-        Set<Node> nodes = nodeManager.getRequiredWorkerNodes();
+//        Set<Node> nodes = nodeManager.getRequiredWorkerNodes();
 //        nodes.size()
 
         List<ConnectorSplit> splits = new ArrayList<>(1);
